@@ -1,0 +1,10 @@
+Create file .vscode/settings.json
+
+Add folders to be excluded from Visual Assist
+
+{
+    "files.exclude": {
+        "**/ThirdParty": true,
+        "**/build": true
+    }
+}
