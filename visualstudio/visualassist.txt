@@ -8,3 +8,6 @@ Add folders to be excluded from Visual Assist
         "**/build": true
     }
 }
+
+Activate these settings using
+VA Options -> Performance -> Do not parse files excluded by .vscode\settings.json (requires restart)
