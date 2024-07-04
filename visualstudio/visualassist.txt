@@ -1,4 +1,4 @@
-Create file .vscode/settings.json
+Create file .vscode/settings.json at the root of the project, mygitroot/ResInsight
 
 Add folders to be excluded from Visual Assist
 
