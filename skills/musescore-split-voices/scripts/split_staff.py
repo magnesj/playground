@@ -255,28 +255,37 @@ def build(src, part, divisi):
                 v.insert(idx + k, r)
             report.append(f'lower m{mno}: filled gap {tt}-{end} with rest(s) - check rhythm')
         staff.append(nm)
-    normalize_lyrics(staff, 'upper' if part == 'U' else 'lower')
+    normalize_lyrics(staff, part)
     if part == 'L':
         strip_eids(staff)  # MuseScore regenerates missing eids; duplicates are not allowed
     return staff
 
 
-def normalize_lyrics(staff, label):
-    """One voice per staff now: lyrics placed above (to tell voices apart) go back below,
-    and duplicate lyrics for the same verse on one chord are dropped."""
+def normalize_lyrics(staff, part):
+    """One voice per staff now: lyrics placed above (to tell voices apart) go back below.
+    If a chord has several lyrics for the same verse, the upper staff keeps the one that
+    was placed above the shared staff and the lower staff keeps one that was below."""
+    label = 'upper' if part == 'U' else 'lower'
     moved = 0
     for mi, m in enumerate(staff.findall('Measure')):
         for ch in m.iter('Chord'):
-            seen = set()
+            by_verse = {}
             for ly in ch.findall('Lyrics'):
-                for p in ly.findall('placement'):
-                    ly.remove(p)
-                    moved += 1
-                no = ly.findtext('no') or '0'
-                if no in seen:
-                    ch.remove(ly)
-                    report.append(f'{label} m{mi + 1}: removed duplicate lyric "{ly.findtext("text")}"')
-                seen.add(no)
+                by_verse.setdefault(ly.findtext('no') or '0', []).append(ly)
+            for lys in by_verse.values():
+                if len(lys) > 1:
+                    above = [ly for ly in lys if ly.findtext('placement') == 'above']
+                    below = [ly for ly in lys if ly.findtext('placement') != 'above']
+                    pref = (above if part == 'U' else below) or lys
+                    for ly in lys:
+                        if ly is not pref[0]:
+                            ch.remove(ly)
+                            report.append(f'{label} m{mi + 1}: dropped extra lyric "{ly.findtext("text")}"'
+                                          f' (kept "{pref[0].findtext("text")}")')
+                for ly in lys:
+                    for p in ly.findall('placement'):
+                        ly.remove(p)
+                        moved += 1
     if moved:
         report.append(f'{label}: {moved} lyric(s) moved from above to below the staff')
 

@@ -69,10 +69,19 @@ Also handled:
   free MIDI channel); every bracket that spanned the old staff grows by one.
 - `eid`s are removed from the new staff (MuseScore regenerates them; duplicates are not allowed).
 - `<location>` jumps inside voices are understood; gaps in the lower staff become plain rests.
+- Slurs whose partner end was dropped (e.g. voice 1 slur ending on a note replaced by voice 2)
+  are removed on that staff — a dangling slur start otherwise pairs with a later, unrelated end.
+- Lyrics placed *above* the shared staff (common convention for the upper voice) are moved back
+  below. When a chord carries two lyrics for the same verse, the upper staff keeps the one that
+  was above and the lower staff keeps the one that was below.
+- Tuplets: durations are scaled; a voice-1 tuplet fully replaced by voice 2 on the lower staff
+  is dropped along with its markers.
+- When splitting both S/A and T/B, split the higher-numbered staff first so the other number
+  doesn't shift.
 
 ## Limitations (the script stops with an error instead of guessing)
 
-- Tuplets on the staff being split.
+- Nested tuplets, or a voice-1 tuplet only partly replaced by voice 2.
 - More than two voices in a bar.
 - A lower-staff overlap that cannot be resolved.
 - The staff belongs to a multi-staff part (e.g. a piano).
