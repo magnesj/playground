@@ -50,12 +50,22 @@ def dur(el):
     return DT[t] * (2 - Fr(1, 2 ** dots))
 
 
+TUPLET_MEMBERS = set()  # id() of source Chord/Rest elements inside a tuplet
+
+
 def timed(voice, where):
-    out, t = [], Fr(0)
+    out, t, ratio = [], Fr(0), None
     for el in voice:
         if el.tag == 'Tuplet':
-            fail(f'{where}: tuplets are not supported by this script')
+            if ratio is not None:
+                fail(f'{where}: nested tuplets are not supported by this script')
+            ratio = Fr(int(el.findtext('normalNotes')), int(el.findtext('actualNotes')))
+        elif el.tag == 'endTuplet':
+            ratio = None
         d = dur(el)
+        if d is not None and ratio is not None:
+            d *= ratio
+            TUPLET_MEMBERS.add(id(el))
         out.append((t, el, d))
         if d is not None:
             t += d
@@ -165,17 +175,20 @@ def build(src, part, divisi):
                 pending.append(el)
                 continue
             keep = not is_cov(t, d)
+            if keep and id(el) in TUPLET_MEMBERS:
+                fail(f'{where}: voice-1 tuplet only partly replaced by voice 2; not supported')
             for p in pending:
-                if (p.tag == 'Beam' and not keep) or is_system(p):
+                if (p.tag == 'Beam' and not keep) or is_system(p) or p.tag in ('Tuplet', 'endTuplet'):
                     continue
-                entries.append((t, 0, copy.deepcopy(p)))
+                entries.append((t, 0, copy.deepcopy(p), None))
             pending = []
             if keep:
                 e = copy.deepcopy(el)
                 if e.tag == 'Chord':
                     reduce_chord(e, 'L', divisi)
-                entries.append((t, 1, e))
-        entries += [(Fr(10 ** 6), 0, copy.deepcopy(p)) for p in pending if not is_system(p)]
+                entries.append((t, 1, e, d))
+        entries += [(Fr(10 ** 6), 0, copy.deepcopy(p), None) for p in pending
+                    if not is_system(p) and p.tag not in ('Tuplet', 'endTuplet')]
 
         v0_chords = {t: el for t, el, d in v0 if el.tag == 'Chord'}
         pending = []
@@ -188,7 +201,7 @@ def build(src, part, divisi):
             if el.findtext('visible') == '0':
                 pending = []
                 continue
-            entries += [(t, 0, copy.deepcopy(p)) for p in pending if not is_system(p)]
+            entries += [(t, 0, copy.deepcopy(p), None) for p in pending if not is_system(p)]
             pending = []
             e = copy.deepcopy(el)
             src_chord = v0_chords.get(t)
@@ -215,13 +228,12 @@ def build(src, part, divisi):
                     and src_chord.findall('Lyrics'):
                 copy_lyrics(src_chord, e)
                 report.append(f'lower m{mno}: lyrics copied from voice 1 at {t}')
-            entries.append((t, 2, e))
-        entries += [(Fr(10 ** 6), 3, copy.deepcopy(p)) for p in pending if not is_system(p)]
+            entries.append((t, 2, e, d))
+        entries += [(Fr(10 ** 6), 3, copy.deepcopy(p), None) for p in pending if not is_system(p)]
         entries.sort(key=lambda x: (x[0], x[1]))
         v = ET.SubElement(nm, 'voice')
         tt = Fr(0)
-        for t, _, e in entries:
-            d = dur(e)
+        for t, _, e, d in entries:
             if d is not None and t < tt:
                 fail(f'{where}: voices overlap for the lower staff at {t}')
             if tt < t <= end:
@@ -243,9 +255,61 @@ def build(src, part, divisi):
                 v.insert(idx + k, r)
             report.append(f'lower m{mno}: filled gap {tt}-{end} with rest(s) - check rhythm')
         staff.append(nm)
+    normalize_lyrics(staff, 'upper' if part == 'U' else 'lower')
     if part == 'L':
         strip_eids(staff)  # MuseScore regenerates missing eids; duplicates are not allowed
     return staff
+
+
+def normalize_lyrics(staff, label):
+    """One voice per staff now: lyrics placed above (to tell voices apart) go back below,
+    and duplicate lyrics for the same verse on one chord are dropped."""
+    moved = 0
+    for mi, m in enumerate(staff.findall('Measure')):
+        for ch in m.iter('Chord'):
+            seen = set()
+            for ly in ch.findall('Lyrics'):
+                for p in ly.findall('placement'):
+                    ly.remove(p)
+                    moved += 1
+                no = ly.findtext('no') or '0'
+                if no in seen:
+                    ch.remove(ly)
+                    report.append(f'{label} m{mi + 1}: removed duplicate lyric "{ly.findtext("text")}"')
+                seen.add(no)
+    if moved:
+        report.append(f'{label}: {moved} lyric(s) moved from above to below the staff')
+
+
+def fix_slurs(staff, label):
+    """Remove slur starts/ends whose partner chord no longer carries the other end
+    (a dangling start would otherwise pair with an unrelated later slur end)."""
+    at = {}
+    for mi, m in enumerate(staff.findall('Measure')):
+        for t, el, d in timed(m.find('voice'), f'measure {mi + 1}'):
+            if el.tag == 'Chord':
+                at[(mi, t)] = el
+
+    def ends(ch, side):
+        return [sp for sp in ch.findall('Spanner') if sp.get('type') == 'Slur' and sp.find(side) is not None]
+
+    def target(mi, t, sp, side):
+        loc = sp.find(side).find('location')
+        return mi + int(loc.findtext('measures') or 0), t + Fr(loc.findtext('fractions') or '0')
+
+    for (mi, t), ch in at.items():
+        for side, other in (('next', 'prev'), ('prev', 'next')):
+            for sp in ends(ch, side):
+                tgt = at.get(target(mi, t, sp, side))
+                if tgt is None or not any(target(*k, o, other) == (mi, t)
+                                          for k in [target(mi, t, sp, side)] for o in ends(tgt, other)):
+                    ch.remove(sp)
+                    report.append(f'{label} m{mi + 1} at {t}: removed slur {"start" if side == "next" else "end"}'
+                                  ' with no matching partner')
+                    continue
+                loc = sp.find(side).find('location')
+                for v in loc.findall('voices'):
+                    loc.remove(v)
 
 
 def fix_ties(staff, label):
@@ -314,6 +378,8 @@ def split(root, staff_no, upper, lower, divisi):
     U, L = build(src, 'U', divisi), build(src, 'L', divisi)
     fix_ties(U, 'upper')
     fix_ties(L, 'lower')
+    fix_slurs(U, 'upper')
+    fix_slurs(L, 'lower')
 
     idx = list(score).index(src)
     score.remove(src)
